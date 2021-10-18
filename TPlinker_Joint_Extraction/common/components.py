@@ -1,8 +1,15 @@
-from IPython.core.debugger import set_trace
+# from IPython.core.debugger import set_trace
 import torch
 import torch.nn as nn
 from torch.nn.parameter import Parameter
 import math
+
+import torch.nn.functional as F
+import torch.optim as optim
+from torch.autograd import Variable
+
+from models import GAT, SpGAT
+
 
 class LayerNorm(nn.Module):
     def __init__(self, input_dim, cond_dim = 0, center = True, scale = True, epsilon = None, conditional = False,
@@ -133,7 +140,7 @@ class HandshakingKernel(nn.Module):
             
         return inner_context
     
-    def forward(self, seq_hiddens):
+    def forward(self, seq_hiddens, text_emb, sdp_index, output):
         '''
         seq_hiddens: (batch_size, seq_len, hidden_size)
         return:
@@ -144,10 +151,12 @@ class HandshakingKernel(nn.Module):
         for ind in range(seq_len):
             hidden_each_step = seq_hiddens[:, ind, :]
             visible_hiddens = seq_hiddens[:, ind:, :] # ind: only look back
-            repeat_hiddens = hidden_each_step[:, None, :].repeat(1, seq_len - ind, 1)  
+            repeat_hiddens = hidden_each_step[:, None, :].repeat(1, seq_len - ind, 1)
+            
+#             sdp_hiddens = [text_emb[index] for index in sdp_index]
             
             if self.shaking_type == "cat":
-                shaking_hiddens = torch.cat([repeat_hiddens, visible_hiddens], dim = -1)
+                shaking_hiddens = torch.cat([output[sdp_index[0]], output[sdp_index[-1]]], dim = -1)
                 shaking_hiddens = torch.tanh(self.combine_fc(shaking_hiddens))
             elif self.shaking_type == "cat_plus":
                 inner_context = self.enc_inner_hiddens(visible_hiddens, self.inner_enc_type)
