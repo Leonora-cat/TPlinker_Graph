@@ -8,7 +8,7 @@ import json
 import os
 from tqdm import tqdm
 import re
-from IPython.core.debugger import set_trace
+# from IPython.core.debugger import set_trace
 from pprint import pprint
 from transformers import AutoModel, BertTokenizerFast
 import copy
@@ -19,6 +19,8 @@ import torch.optim as optim
 import glob
 import time
 import logging
+import sys
+sys.path.append("../")
 from common.utils import Preprocessor, DefaultLogger
 from tplinker import (HandshakingTaggingScheme,
                       DataMaker4Bert, 
@@ -30,6 +32,9 @@ import wandb
 import config
 from glove import Glove
 import numpy as np
+
+import networkx as nx
+import spacy
 
 
 # In[ ]:
@@ -361,7 +366,7 @@ metrics = MetricsCalculator(handshaking_tagger)
 
 
 # train step
-def train_step(batch_train_data, optimizer, loss_weights):
+def train_step(batch_train_data, optimizer, loss_weights, sdp, output):
     if config["encoder"] == "BERT":
         sample_list, batch_input_ids,         batch_attention_mask, batch_token_type_ids,         tok2char_span_list, batch_ent_shaking_tag,         batch_head_rel_shaking_tag, batch_tail_rel_shaking_tag = batch_train_data
         
@@ -385,11 +390,12 @@ def train_step(batch_train_data, optimizer, loss_weights):
 
     # zero the parameter gradients
     optimizer.zero_grad()
+
     
     if config["encoder"] == "BERT":
         ent_shaking_outputs,         head_rel_shaking_outputs,         tail_rel_shaking_outputs = rel_extractor(batch_input_ids, 
                                                   batch_attention_mask, 
-                                                  batch_token_type_ids, 
+                                                  batch_token_type_ids, text, sdp, output
                                                  )
     elif config["encoder"] in {"BiLSTM", }:
         ent_shaking_outputs,         head_rel_shaking_outputs,         tail_rel_shaking_outputs = rel_extractor(batch_input_ids)
@@ -470,8 +476,50 @@ def train_n_valid(train_dataloader, dev_dataloader, optimizer, scheduler, num_ep
         t_ep = time.time()
         start_lr = optimizer.param_groups[0]['lr']
         total_loss, total_ent_sample_acc, total_head_rel_sample_acc, total_tail_rel_sample_acc = 0., 0., 0., 0.
+        model = GAT(nfeat=100, 
+                nhid=8, 
+                nclass=24, 
+                dropout=0.6, 
+                nheads=8, 
+                alpha=0.2)
+        optimizer = optim.Adam(model.parameters(), 
+                       lr=0.005, 
+                       weight_decay=5e-4)
+        
+        nlp = spacy.load('en_core_web_sm')
+        
+        
+
         for batch_ind, batch_train_data in enumerate(dataloader):
             t_batch = time.time()
+            
+            text = batch_train_data[0]["text"]
+            documents = nlp(text)
+
+            for document in documents:
+                edges = []
+                for token in document:
+                    for child in token.children:
+                        edges.append(('{0}-{1}'.format(token.lower_,token.i),
+                                      '{0}-{1}'.format(child.lower_,child.i)))
+            graph = nx.Graph(edges)
+            adj = nx.to_numpy_matrix(graph)
+            features = []
+            text_list = text.split()
+                                                
+            for idx, token in enumerate(text_list)
+                for i in range(idx+1, len(text_list):
+                    sdp = nx.shortest_path_length(graph, source='{}-{}'.format(token, idx), target='{}-{}'.format(text_list[i], i))
+                    features.append(sdp)
+
+            model.train()
+            optimizer.zero_grad()
+            output = model(features, adj)
+            loss_train = F.nll_loss(output[batch_train_data], labels[batch_train_data])
+            acc_train = accuracy(output[batch_train_data], labels[batch_train_data])
+            loss_train.backward()
+            optimizer.step()
+    
             z = (2 * len(rel2id) + 1)
             steps_per_ep = len(dataloader)
             total_steps = hyper_parameters["loss_weight_recover_steps"] + 1 # + 1 avoid division by zero error
@@ -480,7 +528,7 @@ def train_n_valid(train_dataloader, dev_dataloader, optimizer, scheduler, num_ep
             w_rel = min((len(rel2id) / z) * current_step / total_steps, (len(rel2id) / z))
             loss_weights = {"ent": w_ent, "rel": w_rel}
             
-            loss, ent_sample_acc, head_rel_sample_acc, tail_rel_sample_acc = train_step(batch_train_data, optimizer, loss_weights)
+            loss, ent_sample_acc, head_rel_sample_acc, tail_rel_sample_acc = train_step(batch_train_data, optimizer, loss_weights, sdp, output)
             scheduler.step()
             
             total_loss += loss

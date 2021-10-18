@@ -1,6 +1,6 @@
 import re
 from tqdm import tqdm
-from IPython.core.debugger import set_trace
+# from IPython.core.debugger import set_trace
 import copy
 import torch
 import torch.nn as nn
@@ -8,6 +8,11 @@ import json
 from torch.nn.parameter import Parameter
 from common.components import HandshakingKernel
 import math
+
+from models import GAT
+import torch.nn.functional as F
+import torch.optim as optim
+from torch.autograd import Variable
 
 class HandshakingTaggingScheme(object):
     """docstring for HandshakingTaggingScheme"""
@@ -422,14 +427,17 @@ class TPLinkerBert(nn.Module):
         self.ent_add_dist = ent_add_dist
         self.rel_add_dist = rel_add_dist
         
-    def forward(self, input_ids, attention_mask, token_type_ids):
+    def forward(self, input_ids, attention_mask, token_type_ids, text, sdp, output):
         # input_ids, attention_mask, token_type_ids: (batch_size, seq_len)
         context_outputs = self.encoder(input_ids, attention_mask, token_type_ids)
         # last_hidden_state: (batch_size, seq_len, hidden_size)
         last_hidden_state = context_outputs[0]
+        text_emb = [self.encoder(token) for token in text.split()]
+        
+        sdp_index = [node.split("-")[-1] for node in sdp]
         
         # shaking_hiddens: (batch_size, 1 + ... + seq_len, hidden_size)
-        shaking_hiddens = self.handshaking_kernel(last_hidden_state)
+        shaking_hiddens = self.handshaking_kernel(last_hidden_state, text_emb, sdp_index, output)
         shaking_hiddens4ent = shaking_hiddens
         shaking_hiddens4rel = shaking_hiddens
         
